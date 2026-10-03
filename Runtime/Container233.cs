@@ -7,7 +7,7 @@ namespace Ioc233
     [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
     public sealed class AutowiredAttribute : Attribute
     {
-        public string? Name { get; set; }
+        public string Name { get; set; }
         public bool Required { get; set; } = true;
     }
 
@@ -23,7 +23,7 @@ namespace Ioc233
         private Phase _phase;
         private readonly Dictionary<string, object> _objects = new Dictionary<string, object>(StringComparer.Ordinal);
 
-        public void Provide(object instance, string? name = null)
+        public void Provide(object instance, string name = null)
         {
             if (_phase != Phase.Registering) throw new InvalidOperationException("Container registration is closed.");
             if (instance is null) throw new ArgumentNullException(nameof(instance));
@@ -37,15 +37,21 @@ namespace Ioc233
             catch { _phase = Phase.Faulted; throw; }
         }
 
-        public T Get<T>(string? name = null) where T : class
+        public T Get<T>(string name = null) where T : class
         {
-            if (_phase == Phase.Faulted) throw new InvalidOperationException("Container startup failed; create a new container.");
-            return (T)Resolve(typeof(T), name, true)!;
+            return (T)Get(typeof(T), name);
         }
 
-        private object? Resolve(Type type, string? name, bool required)
+        public object Get(Type serviceType, string name = null)
         {
-            object? result = null;
+            if (serviceType == null) throw new ArgumentNullException(nameof(serviceType));
+            if (_phase == Phase.Faulted) throw new InvalidOperationException("Container startup failed; create a new container.");
+            return Resolve(serviceType, name, true);
+        }
+
+        private object Resolve(Type type, string name, bool required)
+        {
+            object result = null;
             if (name != null)
             {
                 if (_objects.TryGetValue(name, out result) && !type.IsInstanceOfType(result))
@@ -85,7 +91,8 @@ namespace Ioc233
 
         private void PlanInjection(object instance, List<Action> assignments)
         {
-            for (Type? type = instance.GetType(); type != null && type != typeof(object); type = type.BaseType)
+            var injectedSetters = new HashSet<MethodInfo>();
+            for (Type type = instance.GetType(); type != null && type != typeof(object); type = type.BaseType)
             {
                 const BindingFlags flags = BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
                 foreach (var field in type.GetFields(flags))
@@ -104,6 +111,7 @@ namespace Ioc233
                     var setter = property.GetSetMethod(true);
                     if (setter is null || setter.IsStatic || property.GetIndexParameters().Length != 0 || property.PropertyType.IsValueType)
                         throw new InvalidOperationException($"Autowired property {property.Name} must be a writable instance reference.");
+                    if (!injectedSetters.Add(setter.GetBaseDefinition())) continue;
                     var value = Resolve(property.PropertyType, attr.Name, attr.Required);
                     if (value != null) assignments.Add(() => property.SetValue(instance, value));
                 }
